@@ -1,0 +1,139 @@
+{
+  "scores": [
+    {
+      "name": "Profitability Score",
+      "weight": 16,
+      "metrics": ["roe", "roce", "roa", "operatingProfitMargin", "netProfitMargin", "roeRange.latestOrTTM", "roceRange.latestOrTTM"],
+      "formula": "0.30*scoreROE(roe) + 0.30*scoreROCE(roce) + 0.15*scoreROA(roa) + 0.15*scoreOPM(operatingProfitMargin) + 0.10*scoreNPM(netProfitMargin). Thresholds (lerp, 0-100): ROE/ROCE — 0%->25, 8%->50, 15%->75, 25%->100. ROA — 0%->20, 4%->50, 8%->75, 15%->100. OPM — 0%->20, 8%->45, 15%->65, 25%->90. NPM — 0%->20, 5%->50, 10%->70, 18%->95. If sector.financials=true, exclude OPM/NPM (not meaningful for banks/NBFCs) and redistribute their 25% weight equally to ROE/ROCE/ROA.",
+      "reason": "Profitability is the most direct evidence a business converts capital and revenue into real returns. ROE/ROCE matter most because they capture return on the capital actually deployed — more decision-relevant than margins alone, which can be high in a small/declining business. roa catches asset-heavy businesses overstating ROE via leverage. Highest-impact metrics: ROE, ROCE."
+    },
+    {
+      "name": "Growth Score",
+      "weight": 16,
+      "metrics": ["salesGrowth3Y", "salesGrowth5Y", "profitGrowth3Y", "profitGrowth5Y", "salesGrowthRange.latestOrTTM", "profitGrowthRange.latestOrTTM", "epsQuarterly"],
+      "formula": "0.25*scoreGrowth(salesGrowth5Y) + 0.20*scoreGrowth(salesGrowthRange.TTM) + 0.20*scoreGrowth(profitGrowth5Y) + 0.15*scoreGrowth(profitGrowthRange.TTM) + 0.10*scoreGrowth(salesGrowth3Y vs 5Y trend) + 0.10*scoreEPSTrend(epsQuarterly). scoreGrowth thresholds: <0%->10, 0%->30, 5%->45, 10%->65, 15%->80, >=25%->100. scoreEPSTrend: % of last 4 quarters showing QoQ/YoY EPS increase, scaled 0-100 (e.g., 4/4 positive ->100, 2/4->50, 0/4->10). If 3Y figures unavailable, weight collapses onto 5Y+TTM figures proportionally.",
+      "reason": "Growth is what re-rates a stock over a multi-year holding period and is the primary swing-trade catalyst when it accelerates. Weighting both 5Y (durability) and TTM (current momentum) prevents rewarding a company that grew well historically but has since stalled, or penalizing a recent turnaround. EPS quarterly trend adds a near-term confirmation signal valuable to swing traders. Highest-impact metrics: salesGrowth5Y, profitGrowthRange.TTM."
+    },
+    {
+      "name": "Financial Health / Solvency Score",
+      "weight": 13,
+      "metrics": ["debtToEquity", "interestCoverage", "currentRatio", "borrowings", "reserves", "sector.financials"],
+      "formula": "0.40*scoreDebt(debtToEquity) + 0.30*scoreInterestCoverage(interestCoverage) + 0.15*scoreCurrentRatio(currentRatio) + 0.15*scoreLeverageTrend(borrowings/reserves vs prior period if available). scoreDebt: <=0.3->100, 0.7->80, 1.0->65, 1.5->40, 2.5->20, >=4->0. scoreInterestCoverage: <1->0, 1.5->30, 3->60, 6->85, >=10->100. scoreCurrentRatio: <0.8->20, 1.0->45, 1.5->75, >=2->90 (too high >4 caps at 80, signaling idle capital). If sector.financials=true, exclude debtToEquity entirely (leverage is structural for BFSI) and redistribute its 40% weight to interestCoverage and currentRatio.",
+      "reason": "A fundamentally strong company that can't service its debt is a fragile holding regardless of growth or profitability — this score is the floor that prevents a high growth/profitability score from masking balance-sheet fragility. Interest coverage is weighted heavily because it directly measures debt-servicing capacity, which D/E alone doesn't (a company can have low D/E but terrible coverage if borrowing costs spike). Highest-impact metrics: debtToEquity (non-BFSI), interestCoverage."
+    },
+    {
+      "name": "Cash Flow Quality Score",
+      "weight": 13,
+      "metrics": ["cfoToOperatingProfitLatest", "cfoToOperatingProfitSeries", "freeCashFlow", "freeCashFlowSeries", "operatingCashFlowSeries", "netCashFlow"],
+      "formula": "0.35*scoreCFOOP(cfoToOperatingProfitLatest) + 0.20*scoreCFOOPConsistency(cfoToOperatingProfitSeries average & variance) + 0.20*scoreFCFTrend(freeCashFlowSeries — % of years positive + YoY growth direction) + 0.15*scoreFCFLatest(freeCashFlow > 0 and growing) + 0.10*scoreOCFConsistency(operatingCashFlowSeries — % of years positive). scoreCFOOP: <0%->10, 40%->35, 60%->55, 80%->75, 100%->95, >130% capped at 90 (over-conversion can mean working-capital release, not pure quality). netCashFlow intentionally excluded from formula (heavily distorted by financing activity — buybacks, debt raises) but surfaced as a contextual note only.",
+      "reason": "Earnings can be manipulated or distorted by accounting choices far more easily than cash flow can — this is the score that answers 'is the reported profit real money?' CFO/OP is weighted highest because it's the single cleanest test of earnings-to-cash conversion. A multi-year FCF series check (rather than one year) protects against rewarding a single lucky year or penalizing one capex-heavy year. Highest-impact metrics: cfoToOperatingProfitLatest, freeCashFlowSeries trend."
+    },
+    {
+      "name": "Earnings Quality Score",
+      "weight": 10,
+      "metrics": ["taxRateLatest", "taxRateSeries", "otherIncomeLatest", "operatingProfitLatest", "profitGrowth5Y", "salesGrowth5Y"],
+      "formula": "0.35*scoreTaxStability(taxRateSeries — penalize if latest tax rate <5% or >50%, or deviates >15pp from 3-year average) + 0.30*scoreOtherIncomeDependency(|otherIncomeLatest| / |operatingProfitLatest|; ratio <5%->95, 10%->70, 20%->40, >35%->10) + 0.35*scoreProfitSalesDivergence(profitGrowth5Y / salesGrowth5Y; ratio 0.5-1.5->90, 2->60, 4->30, >8->10). Each sub-check independently capped — a single bad metric can't be fully offset by two clean ones (use min(weighted_avg, weighted_avg_excluding_worst_metric * 1.1) as a soft floor).",
+      "reason": "This score exists specifically to catch profit growth that looks impressive on paper but is driven by a one-off tax benefit, a large non-operating gain, or a base-effect mismatch between sales and profit — exactly the kind of distortion that inflates a naive growth score. It's deliberately separated from the Growth score so a user can see 'growth is high BUT earnings quality is weak' as two independent signals rather than one blended number that hides the problem. Highest-impact metrics: profit-to-sales growth divergence ratio."
+    },
+    {
+      "name": "Valuation Score",
+      "weight": 10,
+      "metrics": ["stockPE", "relativePE", "industryPE", "pbRatio", "evEbitda", "dividendYield", "profitGrowth5Y"],
+      "formula": "0.35*scorePEG(stockPE / profitGrowth5Y) + 0.25*scoreRelativePE(relativePE or stockPE/industryPE; <0.7->90, 1.0->70, 1.3->50, >1.8->20) + 0.20*scorePB(pbRatio; <1->90, 3->65, 5->45, >8->15) + 0.15*scoreEVEBITDA(evEbitda; <8->90, 15->65, 25->40, >35->15) + 0.05*scoreDividendYield(dividendYield; >3%->80, 1%->55, 0%->40 — capped contribution since growth stocks legitimately pay little). PEG <0.5->95, 1->85, 1.5->65, 2->45, >5->10. If profitGrowth5Y<=0 or missing, fall back to relativePE-only valuation (no PEG component), redistributing its weight to relativePE and PB.",
+      "reason": "Valuation is intentionally the smallest-weighted score in the framework because a cheap stock with weak fundamentals is a value trap, not an opportunity — this framework treats valuation as a multiplier-of-opportunity signal layered on top of quality, not a standalone buy trigger. PEG is weighted highest within this score because raw P/E without growth context is the single most common mistake retail screens make. Highest-impact metric: PEG ratio."
+    },
+    {
+      "name": "Momentum of Fundamentals Score",
+      "weight": 8,
+      "metrics": ["roceRange", "roeRange", "salesGrowthRange", "profitGrowthRange", "opmQuarterly", "epsQuarterly", "stockPriceCagrRange"],
+      "formula": "0.25*scoreTrendDirection(roceRange.latestOrTTM vs roceRange.threeYear vs roceRange.tenYear) + 0.20*scoreTrendDirection(roeRange equivalent) + 0.20*scoreGrowthAcceleration(salesGrowthRange.TTM vs salesGrowthRange.threeYear — is growth speeding up or slowing?) + 0.15*scoreGrowthAcceleration(profitGrowthRange TTM vs 3Y) + 0.20*scoreMarginTrend(opmQuarterly — slope across available quarters, expanding->90-100, flat->55-65, contracting->15-30). scoreTrendDirection: latest >= 10pp above 10Y avg ->90 (genuine improvement), within +-5pp -> 60 (stable), >=10pp below ->20 (deteriorating).",
+      "reason": "A static snapshot score can't distinguish a company on a multi-year improving trajectory from one that peaked years ago and is now declining — both could show an identical ROCE today. This score exists purely to capture direction and acceleration, which swing traders weight heavily (a fundamentally improving but still-mediocre stock can be a better near-term trade than a fundamentally excellent but decelerating one). Highest-impact metrics: ROCE/ROE trend direction, margin (OPM) trend."
+    },
+    {
+      "name": "Risk Score (inverse — higher = safer)",
+      "weight": 8,
+      "metrics": ["debtToEquity", "interestCoverage", "promoterHolding", "cashConversionCycle", "cfoToOperatingProfitLatest", "otherIncomeLatest", "operatingProfitLatest", "sector.financials"],
+      "formula": "0.30*scoreLeverageRisk(debtToEquity, interestCoverage — same as Financial Health but inverted framing) + 0.25*scoreOwnershipRisk(promoterHolding; <15%->30 [high float/control risk], 25%->50, 40%->75, >=50%->90) + 0.20*scoreEarningsQualityRisk(same divergence/other-income checks as Earnings Quality score, reused as a risk lens) + 0.15*scoreWorkingCapitalRisk(cashConversionCycle; <60 days->90, 120->60, 200->35, >300->10) + 0.10*scoreLiquidityRisk(currentRatio). This score deliberately shares metrics with Financial Health and Earnings Quality — it's the same underlying facts viewed through a 'what could go wrong' lens rather than a 'how good is this' lens, and is kept separate so the platform can show a standalone risk badge.",
+      "reason": "Long-term investors and swing traders weigh downside protection differently from upside quality — a stock can score well on profitability and growth while still carrying real balance-sheet or governance risk that should independently gate position sizing. Keeping Risk as its own line item (rather than only folding leverage into Financial Health) lets the UI show a dedicated 'risk level' badge alongside the fundamental score, which is how Tickertape/Trendlyne-style platforms present it. Highest-impact metrics: debtToEquity, promoterHolding level."
+    },
+    {
+      "name": "Ownership & Shareholding Score",
+      "weight": 4,
+      "metrics": ["promoterHolding", "promoterHoldingQuarterly", "fiiHoldingQuarterly", "diiHoldingQuarterly", "publicHolding", "shareholderCount"],
+      "formula": "0.35*scorePromoterTrend(slope of promoterHoldingQuarterly over available quarters — rising/flat->80-100, mild decline ->50-65, sharp decline ->10-30) + 0.35*scoreInstitutionalTrend(combined slope of fiiHoldingQuarterly + diiHoldingQuarterly — both rising->90, mixed->55, both falling->20) + 0.20*scorePromoterLevel(promoterHolding; same buckets as Risk score's ownership check) + 0.10*scoreFloatRisk(publicHolding; very high public % with no major institutional anchor->40, balanced->75).",
+      "reason": "Sustained promoter or institutional buying is one of the strongest informational signals available in public shareholding data — these are informed participants voting with capital. Conversely, a steadily declining promoter stake across several consecutive quarters (even without a single dramatic drop) is a quiet but meaningful caution signal this framework would otherwise miss if it only looked at the latest snapshot. Note: true promoter pledge data isn't available in this dataset — this score should not be read as a full governance check.",
+      "lowWeightNote": "Weighted low deliberately, not because it's unimportant, but because the underlying signal is noisy and slow-moving compared to fundamentals — it should nudge, not dominate, the final score."
+    },
+    {
+      "name": "Operating Efficiency Score",
+      "weight": 2,
+      "metrics": ["assetTurnover", "inventoryTurnover", "receivableDays", "debtorDays", "daysPayable", "workingCapitalDays", "cashConversionCycle"],
+      "formula": "0.30*scoreAssetTurnover(assetTurnover; sector-relative, higher=better for non-financials) + 0.25*scoreInventoryTurnover(inventoryTurnover; higher=better) + 0.25*scoreCashConversionCycle(cashConversionCycle; lower=better, same thresholds as Risk score) + 0.20*scoreWorkingCapitalDays(workingCapitalDays; lower=better, sector-relative).",
+      "reason": "Efficiency metrics are genuinely useful for distinguishing operationally tight businesses from bloated ones, but they're industry-relative by nature (a pharma company's inventory days look nothing like a retailer's) and the framework has no industry-average benchmark for these specific metrics — only a single industryPE figure is available. Weighted low because absolute thresholds here are inherently approximate without sector-normalized comparison data; treat this sub-score as directional, not precise.",
+      "limitationNote": "Without sector-median benchmarks for these specific ratios (unlike P/E, which has industryPE), this score should be considered the least reliable component until sector-relative baselines are added."
+    }
+  ],
+
+  "finalFundamentalScoreFormula": "FundamentalScore = 0.16*Profitability + 0.16*Growth + 0.13*FinancialHealth + 0.13*CashFlowQuality + 0.10*EarningsQuality + 0.10*Valuation + 0.08*MomentumOfFundamentals + 0.08*Risk + 0.04*Ownership + 0.02*Efficiency. All ten sub-scores are computed independently on a 0-100 scale, each handling missing data internally (see missingValueHandling), then combined in this single weighted sum — there is no separate multiplicative risk overlay, since Risk is already a direct weighted component; double-applying it (both as a component and as a multiplier) would over-penalize leveraged-but-improving turnaround stories. If an entire sub-score cannot be computed because every one of its source metrics is missing, exclude that score entirely and renormalize the remaining weights proportionally (divide each remaining weight by (1 - excluded_weight_sum)) rather than substituting a neutral 50 — silently imputing neutral values for an entire missing category creates false confidence in the final number.",
+
+  "missingValueHandling": {
+    "metricLevel": "If a specific metric within a score is missing/'—', exclude only that metric and redistribute its weight proportionally among the remaining present metrics in the same score. Do not default to a neutral 50 for a single missing metric if at least 2 other metrics in that score are present — proportional redistribution preserves the signal from what IS known rather than diluting it with an artificial midpoint.",
+    "scoreLevel": "If every metric feeding a score is missing, mark that score as null/insufficient-data (not 50), exclude it from the final weighted sum, and renormalize remaining score weights. Surface 'Data Confidence: X/10 scores computed' to the user so a 60/100 built from 6 scores doesn't read with the same confidence as a 60/100 built from all 10.",
+    "trendMetrics": "Range-based fields (roceRange, roeRange, salesGrowthRange, profitGrowthRange, stockPriceCagrRange) often arrive with some horizons populated and others not (e.g., tenYear missing for a recently-listed company). Use whichever pair of horizons is available (e.g., threeYear vs latestOrTTM if tenYear/fiveYear are absent) rather than failing the whole trend check — a 2-point trend is still informative."
+  },
+
+  "derivedMetrics": [
+    "PB Ratio = currentPrice / bookValue (cross-check against scraped pbRatio if both available; recompute if pbRatio is '—')",
+    "Relative PE = stockPE / industryPE (cross-check against relativePE field if both populated — flag a discrepancy if they diverge >10%, since it suggests one was computed at a different point in time)",
+    "PEG Ratio = stockPE / profitGrowth5Y (or profitGrowthRange.threeYear as a smoother alternative — TTM profit growth can be volatile/lumpy)",
+    "Implied Sales = operatingProfitLatest / (operatingProfitMargin / 100) — needed because raw Sales isn't a direct field; this unlocks FCF Margin and Net Profit below",
+    "Implied Net Profit = ImpliedSales * (netProfitMargin / 100)",
+    "FCF Margin = freeCashFlow / ImpliedSales",
+    "FCF Growth (YoY) = % change between the two most recent entries in freeCashFlowSeries",
+    "CFO Consistency Score = % of years in operatingCashFlowSeries with a positive value (e.g., 10/12 years positive -> 83%)",
+    "CFO/Net Profit Ratio = operatingCashFlow / ImpliedNetProfit (a second earnings-quality lens distinct from CFO/OP, since OP excludes interest/tax/depreciation effects that the CFO-to-net-profit check captures)",
+    "Institutional Accumulation Score = slope of (fiiHoldingQuarterly + diiHoldingQuarterly) summed per quarter, across all available quarters — positive slope = net institutional accumulation",
+    "Promoter Confidence Trend = slope of promoterHoldingQuarterly in percentage points per quarter, classified as Rising / Stable (+-0.1pp/qtr) / Declining / Sharply Declining (>0.5pp/qtr average drop)",
+    "Earnings Stability Index = coefficient of variation (stddev / mean) of epsQuarterly across available quarters — lower = more stable, predictable earnings",
+    "Margin Expansion/Contraction = opmQuarterly value in the most recent quarter minus its value 4 quarters prior (YoY margin delta in percentage points)",
+    "Cash Conversion Quality (smoothed) = average of cfoToOperatingProfitSeries across all available years, compared against cfoToOperatingProfitLatest — a large gap between the single-year figure and the multi-year average flags a one-off swing rather than a structural change",
+    "ROCE/ROE Trend Direction = categorical flag derived from roceRange/roeRange: 'Recovering' (latest > tenYear by >=10pp), 'Declining' (latest < tenYear by >=10pp), or 'Stable'",
+    "Free Float Proxy = 100% - promoterHolding (rough proxy for tradable float and associated liquidity/volatility risk; not a substitute for actual free-float data)",
+    "Effective Tax Volatility = (max - min) of taxRateSeries across available years — a wide range signals unpredictable one-off tax effects distorting reported profit",
+    "Other Income Dependency Ratio = |otherIncomeLatest| / |operatingProfitLatest| — already used inside Earnings Quality/Risk scores, but worth surfacing as a standalone displayed metric since it's intuitive to a retail user",
+    "Growth Quality Ratio = profitGrowth5Y / salesGrowth5Y — values near 1.0-1.5 suggest organic, sustainable growth; very high or negative-denominator values suggest distortion",
+    "Sector-Relative Profitability Gap = roe - <sector median ROE> (requires the same industry-listing scrape used for industryPE — not yet available per-metric, but worth building once the industry-page scraper exists)"
+  ],
+
+  "redFlags": [
+    "cfoToOperatingProfitLatest persistently below 60% across multiple years in cfoToOperatingProfitSeries — accounting profit not converting to cash",
+    "profitGrowth5Y / salesGrowth5Y ratio exceeding ~3x with no clear margin-expansion story to explain it — likely a base effect, one-off gain, or tax benefit rather than durable operating improvement",
+    "taxRateLatest below 5% or above 50%, especially if it deviates sharply from taxRateSeries' multi-year average — distorts reported net profit and EPS growth",
+    "|otherIncomeLatest| exceeding ~15-20% of operatingProfitLatest — a meaningful chunk of reported profit is non-operating and may not repeat",
+    "promoterHoldingQuarterly showing a consistent decline across 3+ consecutive quarters, even if each individual drop looks small",
+    "fiiHoldingQuarterly and diiHoldingQuarterly both declining over the same period — net institutional distribution, a stronger signal than either alone",
+    "freeCashFlowSeries showing negative FCF in the majority of the most recent 3-5 years despite reported accounting profit being positive",
+    "interestCoverage below 1.5x for a non-financial company — debt servicing is straining current earnings",
+    "currentRatio below 1.0 for a non-financial company — short-term liquidity stress",
+    "roceRange or roeRange showing the latest/TTM figure 10+ percentage points below the 10-year average — a real deterioration, not noise",
+    "cashConversionCycle trending toward or exceeding 250-300+ days — working capital is increasingly tying up cash",
+    "shareholderCount rising sharply in a short period without a corresponding improvement in fundamentals — can indicate retail/momentum-driven interest outrunning the underlying business",
+    "stockPE significantly above industryPE (relativePE > ~1.5-1.8) while growth metrics are average or below-average for the sector — priced for performance the fundamentals don't yet support",
+    "Screener's own `cons` list flags an item the numeric scores didn't independently catch — treat this as a corroborating cross-check, not just decoration"
+  ],
+
+  "greenFlags": [
+    "cfoToOperatingProfitLatest consistently near or above 90-100% across cfoToOperatingProfitSeries — high-quality, cash-backed earnings",
+    "freeCashFlowSeries positive and growing in most of the available years",
+    "promoterHoldingQuarterly flat or rising over multiple consecutive quarters — owners are not reducing their stake",
+    "fiiHoldingQuarterly and diiHoldingQuarterly both rising together over the same period — broad institutional accumulation",
+    "roceRange and roeRange showing the latest/TTM figure meaningfully above the 10-year average — genuine improvement, not just a high absolute number",
+    "salesGrowthRange.latestOrTTM (TTM) higher than salesGrowthRange.threeYear, and that higher than fiveYear — growth is accelerating, not just historically present",
+    "profitGrowth5Y and salesGrowth5Y in a roughly 1.0-1.5x ratio — growth backed by real operating leverage rather than one-off items",
+    "debtToEquity low (<=0.5) combined with high interestCoverage (>6x) — genuine balance-sheet strength, not just an absence of debt",
+    "stockPE below industryPE (relativePE < 1.0) while growth and profitability scores are at or above sector-typical levels — a potential value opportunity rather than a value trap",
+    "opmQuarterly trending upward over the trailing quarters — margin expansion, often an early signal ahead of headline profit growth",
+    "epsQuarterly showing consistent sequential or YoY growth across the available quarters",
+    "Screener's own `pros` checklist corroborating the numeric score with no significant items in `cons`"
+  ]
+}
