@@ -1,10 +1,13 @@
 package com.stockdashboard.controller;
 
+import com.stockdashboard.dto.FundamentalAnalysisResponse;
 import com.stockdashboard.dto.FundamentalScoreResponse;
+import com.stockdashboard.dto.AwardStockResponse;
 import com.stockdashboard.dto.FundamentalsResponse;
 import com.stockdashboard.dto.StockIndicatorResponse;
 import com.stockdashboard.dto.StockOverviewResponse;
 import com.stockdashboard.dto.StockSearchResult;
+import com.stockdashboard.service.BseAwardStockService;
 import com.stockdashboard.service.FundamentalScoreService;
 import com.stockdashboard.service.ScreenerScraperService;
 import com.stockdashboard.service.StockAnalysisService;
@@ -21,17 +24,20 @@ public class StockController {
     private final StockAnalysisService stockAnalysisService;
     private final FundamentalScoreService fundamentalScoreService;
     private final ScreenerScraperService screenerScraperService;
+    private final BseAwardStockService bseAwardStockService;
 
     public StockController(
             StockSearchService stockSearchService,
             StockAnalysisService stockAnalysisService,
             FundamentalScoreService fundamentalScoreService,
-            ScreenerScraperService screenerScraperService
+            ScreenerScraperService screenerScraperService,
+            BseAwardStockService bseAwardStockService
     ) {
         this.stockSearchService = stockSearchService;
         this.stockAnalysisService = stockAnalysisService;
         this.fundamentalScoreService = fundamentalScoreService;
         this.screenerScraperService = screenerScraperService;
+        this.bseAwardStockService = bseAwardStockService;
     }
 
     @GetMapping("/search")
@@ -56,15 +62,27 @@ public class StockController {
     }
 
     @GetMapping("/{symbol}/fundamentals/analysis")
-    public FundamentalScoreResponse getFundamentalAnalysis(@PathVariable String symbol) {
-        FundamentalsResponse fundamentals = screenerScraperService.fetchFundamentals(symbol.trim().toUpperCase());
-        return fundamentalScoreService.analyze(fundamentals);
+    public FundamentalAnalysisResponse getFundamentalAnalysis(@PathVariable String symbol) {
+        String normalizedSymbol = symbol.trim().toUpperCase();
+        FundamentalsResponse fundamentals = screenerScraperService.fetchFundamentals(normalizedSymbol);
+        FundamentalScoreResponse score = fundamentalScoreService.analyze(fundamentals);
+        return new FundamentalAnalysisResponse(fundamentals, score);
     }
 
     @GetMapping("/{symbol}/score")
     public FundamentalScoreResponse getFundamentalScore(@PathVariable String symbol) {
         FundamentalsResponse fundamentals = screenerScraperService.fetchFundamentals(symbol.trim().toUpperCase());
         return fundamentalScoreService.analyze(fundamentals);
+    }
+
+    @GetMapping("/awards")
+    public List<AwardStockResponse> getAwardStocks(
+            @RequestParam(defaultValue = "1") int pageNo,
+            @RequestParam String prevDate,
+            @RequestParam String toDate,
+            @RequestParam(defaultValue = "P") String search
+    ) {
+        return bseAwardStockService.fetchAwardStocks(pageNo, prevDate, toDate, search);
     }
 
     /**

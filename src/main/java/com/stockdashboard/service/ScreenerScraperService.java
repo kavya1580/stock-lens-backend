@@ -38,6 +38,7 @@ public class ScreenerScraperService {
     private static final String USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
     private static final String STANDALONE_URL = "https://www.screener.in/company/%s/";
+    private static final int REQUEST_TIMEOUT_MS = 20_000;
     ;
 
     @Cacheable(value = "fundamentals", key = "#symbol")
@@ -63,6 +64,8 @@ public class ScreenerScraperService {
                 topRatios.get("Current Price"),
                 topRatios.get("Book Value")
         );
+
+        String changePercent = extractChangePercent(doc, topRatios);
 
         try {
             String warehouseId = extractWarehouseId(doc);
@@ -182,6 +185,7 @@ public class ScreenerScraperService {
                 companyName,
                 topRatios.getOrDefault("Market Cap", "—"),
                 topRatios.getOrDefault("Current Price", "—"),
+                changePercent,
                 topRatios.getOrDefault("Stock P/E", "—"),
                 relativePE,
                 industryPE,
@@ -450,6 +454,44 @@ public class ScreenerScraperService {
                 return topRatios.get(name);
             }
         }
+        return "—";
+    }
+
+    private String extractChangePercent(Document doc, Map<String, String> topRatios) {
+        Element changeElement = doc.selectFirst("#top .font-size-18 .up, #top .font-size-18 .down");
+        if (changeElement != null) {
+            String changeText = changeElement.text().trim();
+            if (!changeText.isBlank()) {
+                if (changeElement.hasClass("down") && !changeText.startsWith("-")) {
+                    return "-" + changeText;
+                }
+                if (changeElement.hasClass("up") && !changeText.startsWith("+")) {
+                    return "+" + changeText;
+                }
+                return changeText;
+            }
+        }
+
+        String currentPriceRaw = topRatios.getOrDefault("Current Price", "—");
+        if (currentPriceRaw != null && currentPriceRaw.contains("%")) {
+            int s = currentPriceRaw.indexOf('(');
+            int e = currentPriceRaw.indexOf(')', s >= 0 ? s : 0);
+            if (s >= 0 && e > s) {
+                return currentPriceRaw.substring(s + 1, e).trim();
+            }
+
+            int p = currentPriceRaw.indexOf('%');
+            if (p > 0) {
+                int start = Math.max(0, currentPriceRaw.lastIndexOf(' ', p));
+                return currentPriceRaw.substring(start, p + 1).trim();
+            }
+        }
+
+        String maybe = getTopRatioValue(topRatios, "Change", "Change %", "% Change", "Chg");
+        if (!maybe.equals("—") && maybe.contains("%")) {
+            return maybe;
+        }
+
         return "—";
     }
 

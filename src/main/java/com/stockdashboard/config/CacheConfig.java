@@ -35,6 +35,14 @@ public class CacheConfig {
                         .build()
         );
 
+        manager.registerCustomCache(
+            "awardStocks",
+            Caffeine.newBuilder()
+                .expireAfterWrite(30, TimeUnit.MINUTES)
+                .maximumSize(100)
+                .build()
+        );
+
         return manager;
     }
 }

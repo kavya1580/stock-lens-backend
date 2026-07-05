@@ -24,6 +24,7 @@ public record FundamentalsResponse(
         String companyName,
         String marketCap,
         String currentPrice,
+        String changePercent,
         String stockPE,
         String relativePE,
         String industryPE,
