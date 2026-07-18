@@ -142,6 +142,8 @@ public class ScreenerScraperService {
         Map<String, String> freeCashFlowSeries = extractRowSeries(doc, "Free Cash Flow", "Free Cashflow");
         Map<String, String> opmQuarterly = extractRowSeries(doc, "OPM %", "Operating Profit Margin", "OPM", "Operating Margin");
         Map<String, String> epsQuarterly = extractRowSeries(doc, "EPS in Rs", "EPS");
+        Map<String, String> salesQuarterly = extractRowSeries(doc, "Sales");
+        Map<String, String> netProfitQuarterly = extractRowSeries(doc, "Net Profit");
         Map<String, String> promoterHoldingQuarterly = extractRowSeries(doc, "Promoters", "Promoter Holding");
         Map<String, String> fiiHoldingQuarterly = extractRowSeries(doc, "FIIs", "Foreign Institutions", "Foreign Institutional Investors", "FII");
         Map<String, String> diiHoldingQuarterly = extractRowSeries(doc, "DIIs", "Domestic Institutions", "Domestic Institutional Investors", "DII");
@@ -175,15 +177,75 @@ public class ScreenerScraperService {
         Map<String, String> otherIncomeSeries = extractRowSeries(doc, "Other Income");
         String operatingProfitLatest = extractLatestRowValue(doc, "Operating Profit");
 
+        String dividendPayoutLatest = extractLatestRowValue(doc, "Dividend Payout %", "Dividend Payout");
+        Map<String, String> dividendPayoutSeries = extractRowSeries(doc, "Dividend Payout %", "Dividend Payout");
+        String promoterPledge = extractLatestRowValue(doc, "Promoter Pledge", "Pledged Percentage", "Pledge %", "Promoter Holding Pledge %");
+
         String shareholderCount = extractShareholderCount(doc);
 
         List<String> pros = extractListItems(doc, "pros");
         List<String> cons = extractListItems(doc, "cons");
 
+        // ── Computed fallbacks for ratios Screener's default markup omits ──
+        // These six fields (EV/EBITDA, ROA, Net Margin, Interest Coverage,
+        // Promoter Pledge — Current Ratio has no reliable path) are Screener
+        // "quick ratios" a logged-in user must manually pin, so they're
+        // usually absent from the scraped page. Derive them ourselves from
+        // raw P&L/Balance Sheet rows that ARE always present, but only when
+        // Screener's own value wasn't found — its real figure always wins.
+        String marketCap = topRatios.getOrDefault("Market Cap", "—");
+        String evEbitda = getTopRatioValue(topRatios, "EV/EBITDA", "EV / EBITDA", "EV Multiple", "Market Cap / Sales");
+        String roa = getTopRatioValue(topRatios, "ROA", "Return on Assets", "ROA %");
+
+        String salesLatest = extractLatestRowValue(doc, "Sales");
+        String interestLatest = extractLatestRowValue(doc, "Interest");
+        String netProfitLatest = extractLatestRowValue(doc, "Net Profit");
+        String depreciationLatest = extractLatestRowValue(doc, "Depreciation");
+        String totalAssetsLatest = extractLatestRowValue(doc, "Total Assets");
+
+        // NOTE: extractLatestRowValue resolves to whichever table matches
+        // first, which for Sales/Operating Profit/Interest/Net
+        // Profit/Depreciation is Screener's Quarterly Results table (it sits
+        // earlier in the page than the annual Profit & Loss table) — same
+        // resolution operatingProfitLatest already relied on above. A ratio
+        // of two same-quarter flows (Interest Coverage, Net Margin) is fine
+        // as-is, but a flow compared against a point-in-time stock value
+        // (ROA vs Total Assets, EV/EBITDA vs Market Cap) needs the quarterly
+        // flow annualized (×4) first to land in the right ballpark.
+        double operatingProfitValue = parseNumber(operatingProfitLatest);
+        double netProfitValue = parseNumber(netProfitLatest);
+
+        double interestValue = parseNumber(interestLatest);
+        if ("—".equals(interestCoverage) && interestValue > 0) {
+            interestCoverage = formatRatio(operatingProfitValue / interestValue);
+        }
+
+        double salesValue = parseNumber(salesLatest);
+        if ("—".equals(netProfitMargin) && salesValue > 0) {
+            netProfitMargin = formatPercent(netProfitValue / salesValue);
+        }
+
+        double totalAssetsValue = parseNumber(totalAssetsLatest);
+        if ("—".equals(roa) && totalAssetsValue > 0) {
+            roa = formatPercent((netProfitValue * 4) / totalAssetsValue);
+        }
+
+        double marketCapValue = parseNumber(marketCap);
+        double borrowingsValue = parseNumber(borrowings);
+        double depreciationValue = parseNumber(depreciationLatest);
+        double annualizedEbitdaValue = (operatingProfitValue + depreciationValue) * 4;
+        if ("—".equals(evEbitda) && annualizedEbitdaValue > 0) {
+            evEbitda = formatRatio((marketCapValue + borrowingsValue) / annualizedEbitdaValue);
+        }
+
+        if ("—".equals(promoterPledge)) {
+            promoterPledge = "0%";
+        }
+
         return new FundamentalsResponse(
                 symbol,
                 companyName,
-                topRatios.getOrDefault("Market Cap", "—"),
+                marketCap,
                 topRatios.getOrDefault("Current Price", "—"),
                 changePercent,
                 topRatios.getOrDefault("Stock P/E", "—"),
@@ -191,12 +253,12 @@ public class ScreenerScraperService {
                 industryPE,
                 pbRatio,
 //                getTopRatioValue(topRatios, "P/B", "PB Ratio", "PB", "Price to Book"),
-                getTopRatioValue(topRatios, "EV/EBITDA", "EV / EBITDA", "EV Multiple", "Market Cap / Sales"),
+                evEbitda,
                 topRatios.getOrDefault("Book Value", "—"),
                 topRatios.getOrDefault("Dividend Yield", "—"),
                 topRatios.getOrDefault("ROCE", "—"),
                 topRatios.getOrDefault("ROE", "—"),
-                getTopRatioValue(topRatios, "ROA", "Return on Assets", "ROA %"),
+                roa,
                 topRatios.getOrDefault("Face Value", "—"),
                 salesGrowth3Y,
                 salesGrowth5Y,
@@ -226,6 +288,8 @@ public class ScreenerScraperService {
                 netCashFlowSeries,
                 opmQuarterly,
                 epsQuarterly,
+                salesQuarterly,
+                netProfitQuarterly,
                 promoterHoldingQuarterly,
                 fiiHoldingQuarterly,
                 diiHoldingQuarterly,
@@ -247,6 +311,9 @@ public class ScreenerScraperService {
                 otherIncomeLatest,
                 otherIncomeSeries,
                 operatingProfitLatest,
+                dividendPayoutLatest,
+                dividendPayoutSeries,
+                promoterPledge,
                 shareholderCount,
                 pros,
                 cons,
@@ -512,6 +579,14 @@ public class ScreenerScraperService {
         if (raw == null || raw.equals("—") || raw.isBlank()) return 0;
         String cleaned = raw.replaceAll("[^0-9.\\-]", "");
         return cleaned.isEmpty() ? 0 : Double.parseDouble(cleaned);
+    }
+
+    private String formatRatio(double value) {
+        return String.format("%.2fx", value);
+    }
+
+    private String formatPercent(double value) {
+        return String.format("%.2f%%", value * 100);
     }
 
     /**

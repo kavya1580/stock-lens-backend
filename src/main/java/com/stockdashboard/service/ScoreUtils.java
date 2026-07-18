@@ -737,6 +737,43 @@ public final class ScoreUtils {
         return 15.0;
     }
 
+    public static Double scorePromoterPledge(double value) {
+        if (!isValid(value) || value < 0) {
+            return null;
+        }
+        if (value <= 0) {
+            return 100.0;
+        }
+        if (value < 10) {
+            return 70.0;
+        }
+        if (value <= 25) {
+            return 35.0;
+        }
+        return 5.0;
+    }
+
+    public static Double scoreDividendPayoutSustainability(List<Double> payoutSeries) {
+        if (payoutSeries == null || payoutSeries.isEmpty()) {
+            return null;
+        }
+        long over100Count = payoutSeries.stream().filter(v -> isValid(v) && v > 100).count();
+        if (over100Count >= 2) {
+            return 30.0;
+        }
+        double avg = payoutSeries.stream().filter(ScoreUtils::isValid).mapToDouble(Double::doubleValue).average().orElse(Double.NaN);
+        if (!isValid(avg)) {
+            return 55.0;
+        }
+        double variance = payoutSeries.stream().filter(ScoreUtils::isValid)
+                .mapToDouble(v -> Math.pow(v - avg, 2)).average().orElse(0.0);
+        double stddev = Math.sqrt(variance);
+        if (avg >= 40 && avg <= 70 && stddev < 20) {
+            return 90.0;
+        }
+        return 55.0;
+    }
+
     public static Double scoreInstitutionalTrend(double slope) {
         if (!isValid(slope)) {
             return null;

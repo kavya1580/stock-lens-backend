@@ -354,23 +354,31 @@ public final class ScoreCalculator {
             scores.put("dividendYield", ScoreUtils.scoreDividendYield(dividendYield));
             metrics.put("dividendYield", dividendYield);
         }
+        List<Double> dividendPayoutSeries = ScoreUtils.parseSeriesValues(f.dividendPayoutSeries());
+        if (!dividendPayoutSeries.isEmpty()) {
+            scores.put("dividendPayout", ScoreUtils.scoreDividendPayoutSustainability(dividendPayoutSeries));
+            metrics.put("dividendPayoutLatest", ScoreUtils.parseDouble(f.dividendPayoutLatest()));
+            metrics.put("dividendPayoutSeries", dividendPayoutSeries);
+        }
 
         Map<String, Double> weights = new LinkedHashMap<>();
         if (scores.containsKey("peg")) {
             weights.put("peg", 0.35);
             weights.put("relativePE", 0.25);
             weights.put("pbRatio", 0.20);
-            weights.put("evEbitda", 0.15);
+            weights.put("evEbitda", 0.10);
             weights.put("dividendYield", 0.05);
+            weights.put("dividendPayout", 0.05);
         } else {
             weights.put("relativePE", 0.50);
             weights.put("pbRatio", 0.30);
-            weights.put("evEbitda", 0.15);
+            weights.put("evEbitda", 0.10);
             weights.put("dividendYield", 0.05);
+            weights.put("dividendPayout", 0.05);
         }
 
         Double score = ScoreUtils.weightedScore(scores, weights);
-        String explanation = "Valuation combines relative P/E, PB, EV/EBITDA, and dividend yield, using PEG if growth data is available.";
+        String explanation = "Valuation combines relative P/E, PB, EV/EBITDA, dividend yield, and dividend payout sustainability, using PEG if growth data is available.";
         if (score == null) {
             explanation = "Valuation score could not be computed due to missing valuation metrics.";
         }
@@ -504,9 +512,9 @@ public final class ScoreCalculator {
             metrics.put("promoterTrendSlope", promoterSlope);
             metrics.put("promoterTrendLabel", derived.promoterTrend());
         }
-        if (ScoreUtils.isValid(fiiSlope) && ScoreUtils.isValid(diiSlope)) {
-            double combinedSlope = (fiiSlope + diiSlope) / 2.0;
-            scores.put("institutionalTrend", ScoreUtils.scoreInstitutionalTrend(combinedSlope));
+        double institutionalSlope = derived.institutionalSlope();
+        if (ScoreUtils.isValid(fiiSlope) && ScoreUtils.isValid(diiSlope) && ScoreUtils.isValid(institutionalSlope)) {
+            scores.put("institutionalTrend", ScoreUtils.scoreInstitutionalTrend(institutionalSlope));
             metrics.put("fiiSlope", fiiSlope);
             metrics.put("diiSlope", diiSlope);
         }
@@ -518,11 +526,17 @@ public final class ScoreCalculator {
             scores.put("publicHolding", ScoreUtils.scoreFloatRisk(publicHolding));
             metrics.put("publicHolding", publicHolding);
         }
+        double promoterPledge = ScoreUtils.parseDouble(f.promoterPledge());
+        if (ScoreUtils.isValid(promoterPledge)) {
+            scores.put("promoterPledge", ScoreUtils.scorePromoterPledge(promoterPledge));
+            metrics.put("promoterPledge", promoterPledge);
+        }
 
         Map<String, Double> weights = Map.of(
-                "promoterTrend", 0.35,
-                "institutionalTrend", 0.35,
-                "promoterLevel", 0.20,
+                "promoterTrend", 0.30,
+                "institutionalTrend", 0.30,
+                "promoterLevel", 0.15,
+                "promoterPledge", 0.15,
                 "publicHolding", 0.10
         );
 
@@ -605,6 +619,28 @@ public final class ScoreCalculator {
             long negativeCount = fcfSeries.stream().filter(v -> ScoreUtils.isValid(v) && v < 0).count();
             if (negativeCount > fcfSeries.size() / 2) {
                 flags.add(new RedFlag("Negative Free Cash Flow", "Free cash flow is negative in the majority of recent years."));
+            }
+        }
+        double reserves = ScoreUtils.parseDouble(f.reserves());
+        if (ScoreUtils.isValid(reserves) && reserves < 0) {
+            flags.add(new RedFlag("Negative Reserves / Net Worth", "Reserves are negative, indicating negative net worth."));
+        }
+        List<Double> dividendPayoutSeries = ScoreUtils.parseSeriesValues(f.dividendPayoutSeries());
+        if (!dividendPayoutSeries.isEmpty()) {
+            long over100Count = dividendPayoutSeries.stream().filter(v -> ScoreUtils.isValid(v) && v > 100).count();
+            if (over100Count >= 2) {
+                flags.add(new RedFlag("Unsustainable Dividend Payout", "Dividend payout has exceeded 100% of profit in multiple recent years."));
+            }
+        }
+        double promoterPledge = ScoreUtils.parseDouble(f.promoterPledge());
+        if (ScoreUtils.isValid(promoterPledge) && promoterPledge > 10) {
+            flags.add(new RedFlag("Promoter Shares Pledged", "More than 10% of promoter holding is pledged."));
+        }
+        if (f.cons() != null) {
+            for (String con : f.cons()) {
+                if (con != null && !con.isBlank()) {
+                    flags.add(new RedFlag("Screener Flag", con));
+                }
             }
         }
 

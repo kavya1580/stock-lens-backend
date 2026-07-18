@@ -21,4 +21,16 @@ public class WebClientConfig {
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
                 .build();
     }
+
+    /**
+     * NSE's archive server 403s/empty-responds to requests without a browser-like User-Agent,
+     * same as Yahoo's chart endpoint above.
+     */
+    @Bean
+    public WebClient nseWebClient() {
+        return WebClient.builder()
+                .defaultHeader(HttpHeaders.USER_AGENT,
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+                .build();
+    }
 }

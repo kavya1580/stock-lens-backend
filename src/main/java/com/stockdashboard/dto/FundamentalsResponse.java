@@ -76,6 +76,8 @@ public record FundamentalsResponse(
         Map<String, String> netCashFlowSeries,
         Map<String, String> opmQuarterly,
         Map<String, String> epsQuarterly,
+        Map<String, String> salesQuarterly,
+        Map<String, String> netProfitQuarterly,
         Map<String, String> promoterHoldingQuarterly,
         Map<String, String> fiiHoldingQuarterly,
         Map<String, String> diiHoldingQuarterly,
@@ -115,6 +117,13 @@ public record FundamentalsResponse(
         String otherIncomeLatest,
         Map<String, String> otherIncomeSeries,
         String operatingProfitLatest, // needed as denominator for the ratio above
+
+        // ── NEW: dividend payout sustainability & promoter pledge ────────
+        // Payout ratio (not just yield) shows whether dividends are backed by
+        // profit; pledge is best-effort since Screener frequently omits it.
+        String dividendPayoutLatest,
+        Map<String, String> dividendPayoutSeries,
+        String promoterPledge,
 
         // ── NEW: ownership breadth ────────────────────────────────────────
         String shareholderCount,

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.stockdashboard.dto.AwardStockResponse;
 import com.stockdashboard.dto.FundamentalScoreResponse;
 import com.stockdashboard.dto.FundamentalsResponse;
+import com.stockdashboard.dto.PagedResult;
 import com.stockdashboard.dto.StockSearchResult;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -35,17 +36,31 @@ public class BseAwardStockService {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
     private static final String BSE_ANNOUNCEMENT_URL =
             "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w";
+    private static final String BSE_ATTACHMENT_BASE_URL =
+            "https://www.bseindia.com/xml-data/corpfiling/AttachLive/";
+    private static final String BSE_SITE_BASE_URL = "https://www.bseindia.com/";
 
     private static final Pattern COMPANY_FROM_PATTERN = Pattern.compile(
-            "(?i)\\b(?:from|received from|received order from|order from|award from|awarded by|letter of award from|letter of intent from|loa from|loi from|purchase order from)\\s+([^\\.\\,\\;\\n]+)");
+            "(?i)\\b(?:from|received from|received order from|order from|award from|awarded by|letter of award from|letter of intent from|loa from|loi from|purchase order from|agreement with|contract with|mou with|tie[- ]?up with|understanding with)\\s+((?:(?!\\.\\s|[,;\\n]).)+)");
     private static final Pattern MONEY_PATTERN = Pattern.compile(
             "(?i)(?:Rs\\.?|₹|INR|USD)\\s*[0-9][0-9,]*(?:\\.[0-9]+)?(?:\\s*(?:Crores?|Crore|Cr|Lakhs?|Lacs?|L|Million|Billion|Thousand|Mn))?(?:\\s*\\([^)]*\\))?");
     private static final Pattern MONEY_WORD_PATTERN = Pattern.compile(
             "(?i)\\b[0-9][0-9,]*(?:\\.[0-9]+)?\\s*(?:Crores?|Crore|Cr|Lakhs?|Lacs?|L|Million|Billion|Thousand|Mn)\\b");
+    private static final Pattern MONEY_BARE_PATTERN = Pattern.compile(
+            "(?i)(?:Rs\\.?|₹|INR)\\s*[:\\-]?\\s*(\\d{1,2}(?:,\\d{2})*,\\d{3}(?:\\.\\d+)?)\\s*/?-?");
+    private static final Pattern NON_BUSINESS_ORDER_PATTERN = Pattern.compile(
+            "(?i)\\b(income tax act|section 271|itat|excise\\s*&?\\s*taxation|assessing authority|gst act|penalty order|demand order|tribunal|tax authorit(?:y|ies))\\b");
+    // I/O-bound (network scrape), so a higher cap than CPU core count is fine here.
     private static final ExecutorService LOOKUP_EXECUTOR = Executors.newFixedThreadPool(
-            Math.max(2, Math.min(6, Runtime.getRuntime().availableProcessors()))
+            Math.max(4, Math.min(12, Runtime.getRuntime().availableProcessors() * 2))
     );
-    private static final long ROW_LOOKUP_TIMEOUT_SECONDS = 4;
+    // ScreenerScraperService itself uses a 10s Jsoup timeout per request (and may retry once on a
+    // 404 with a second 10s request), so this must comfortably exceed that or well-covered stocks
+    // spuriously show "Insufficient Data" whenever Screener.in is briefly slow or the thread pool is busy.
+    private static final long ROW_LOOKUP_TIMEOUT_SECONDS = 12;
+
+    // BSE's own fixed page size for this feed (not documented anywhere, confirmed by probing the live API).
+    private static final int BSE_PAGE_SIZE = 50;
 
     private final ObjectMapper objectMapper;
     private final StockSearchService stockSearchService;
@@ -72,7 +87,7 @@ public class BseAwardStockService {
     }
 
     @Cacheable(value = "awardStocks", key = "#pageNo + '-' + #prevDate + '-' + #toDate + '-' + #search")
-    public List<AwardStockResponse> fetchAwardStocks(int pageNo, String prevDate, String toDate, String search) {
+    public PagedResult<AwardStockResponse> fetchAwardStocks(int pageNo, String prevDate, String toDate, String search) {
         String payload = webClient.get()
                 .uri(buildUri(pageNo, prevDate, toDate, search))
                 .retrieve()
@@ -80,18 +95,22 @@ public class BseAwardStockService {
                 .block(Duration.ofSeconds(30));
 
         if (payload == null || payload.isBlank()) {
-            return List.of();
+            return new PagedResult<>(List.of(), pageNo, 0, 0);
         }
 
         try {
             JsonNode root = objectMapper.readTree(payload);
             JsonNode table = root.path("Table");
-            if (!table.isArray()) {
-                return List.of();
+            List<JsonNode> rows = new ArrayList<>();
+            if (table.isArray()) {
+                table.forEach(rows::add);
             }
 
-            List<JsonNode> rows = new ArrayList<>();
-            table.forEach(rows::add);
+            int totalCount = 0;
+            JsonNode table1 = root.path("Table1");
+            if (table1.isArray() && !table1.isEmpty()) {
+                totalCount = table1.get(0).path("ROWCNT").asInt(0);
+            }
 
             List<CompletableFuture<RowResult>> futures = new ArrayList<>();
             for (int i = 0; i < rows.size(); i++) {
@@ -104,11 +123,14 @@ public class BseAwardStockService {
                         .exceptionally(ex -> new RowResult(index, fallback)));
             }
 
-            return futures.stream()
+            List<AwardStockResponse> items = futures.stream()
                     .map(CompletableFuture::join)
                     .sorted(Comparator.comparingInt(RowResult::index))
                     .map(RowResult::response)
                     .toList();
+
+            int totalPages = totalCount <= 0 ? 0 : (int) Math.ceil(totalCount / (double) BSE_PAGE_SIZE);
+            return new PagedResult<>(items, pageNo, totalCount, totalPages);
         } catch (Exception e) {
             throw new RuntimeException("Failed to parse BSE award announcement payload", e);
         }
@@ -121,19 +143,36 @@ public class BseAwardStockService {
         String companyName = text(row, "SLONGNAME");
         String symbol = resolveSymbol(companyName, text(row, "NSURL"));
         String announcementHeadline = firstNonBlank(text(row, "MORE"), text(row, "HEADLINE"), text(row, "NEWSSUB"));
+        String amountSource = firstNonBlank(text(row, "MORE"), announcementHeadline);
+
+        boolean nonBusinessOrder = NON_BUSINESS_ORDER_PATTERN.matcher(announcementHeadline).find();
 
         return new AwardStockResponse(
                 companyName,
                 symbol,
-                extractOrderFromWho(announcementHeadline),
-                extractOrderAmount(firstNonBlank(text(row, "MORE"), announcementHeadline)),
+                nonBusinessOrder ? "—" : extractOrderFromWho(announcementHeadline),
+                nonBusinessOrder ? "—" : extractOrderAmount(amountSource),
                 "—",
                 null,
                 null,
                 announcementHeadline,
                 text(row, "DT_TM"),
-                text(row, "NSURL")
+                resolveSourceUrl(row)
         );
+    }
+
+    private String resolveSourceUrl(JsonNode row) {
+        String attachment = text(row, "ATTACHMENTNAME");
+        if (!attachment.isBlank()) {
+            return BSE_ATTACHMENT_BASE_URL + attachment;
+        }
+
+        String nsurl = text(row, "NSURL");
+        if (nsurl.isBlank()) {
+            return "";
+        }
+
+        return nsurl.startsWith("http") ? nsurl : BSE_SITE_BASE_URL + nsurl;
     }
 
     private URI buildUri(int pageNo, String prevDate, String toDate, String search) {
@@ -260,6 +299,11 @@ public class BseAwardStockService {
         Matcher wordMatcher = MONEY_WORD_PATTERN.matcher(text);
         if (wordMatcher.find()) {
             return wordMatcher.group().replaceAll("\\s+", " ").trim();
+        }
+
+        Matcher bareMatcher = MONEY_BARE_PATTERN.matcher(text);
+        if (bareMatcher.find()) {
+            return bareMatcher.group().replaceAll("\\s+", " ").trim();
         }
 
         return "—";

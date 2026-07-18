@@ -43,6 +43,45 @@ public class CacheConfig {
                 .build()
         );
 
+        // Board-meeting/results announcements are also a live scrape of the
+        // day's feed, so they get the same 30-min TTL as awardStocks above.
+        manager.registerCustomCache(
+            "resultsUpcoming",
+            Caffeine.newBuilder()
+                .expireAfterWrite(30, TimeUnit.MINUTES)
+                .maximumSize(100)
+                .build()
+        );
+
+        manager.registerCustomCache(
+            "resultsAnnounced",
+            Caffeine.newBuilder()
+                .expireAfterWrite(30, TimeUnit.MINUTES)
+                .maximumSize(100)
+                .build()
+        );
+
+        // Headlines churn throughout the day, so this needs a much shorter
+        // TTL than the fundamentals-style caches above.
+        manager.registerCustomCache(
+            "news",
+            Caffeine.newBuilder()
+                .expireAfterWrite(15, TimeUnit.MINUTES)
+                .maximumSize(300)
+                .build()
+        );
+
+        // AI analysis is a paid-in-quota external call per symbol, and the
+        // underlying fundamentals/technicals don't meaningfully change
+        // intraday, so cache it well beyond the indicators TTL.
+        manager.registerCustomCache(
+            "geminiAnalysis",
+            Caffeine.newBuilder()
+                .expireAfterWrite(12, TimeUnit.HOURS)
+                .maximumSize(200)
+                .build()
+        );
+
         return manager;
     }
 }

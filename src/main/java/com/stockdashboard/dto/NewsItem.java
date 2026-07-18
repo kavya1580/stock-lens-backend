@@ -1,0 +1,4 @@
+package com.stockdashboard.dto;
+
+public record NewsItem(String title, String link, String source, String publishedAt) {
+}
