@@ -7,6 +7,8 @@ import com.stockdashboard.dto.FundamentalScoreResponse;
 import com.stockdashboard.dto.FundamentalsResponse;
 import com.stockdashboard.dto.PagedResult;
 import com.stockdashboard.dto.StockSearchResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.cache.annotation.Cacheable;
@@ -32,6 +34,8 @@ import java.util.regex.Pattern;
 @Service
 public class BseAwardStockService {
 
+    private static final Logger log = LoggerFactory.getLogger(BseAwardStockService.class);
+
     private static final String USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
     private static final String BSE_ANNOUNCEMENT_URL =
@@ -50,14 +54,20 @@ public class BseAwardStockService {
             "(?i)(?:Rs\\.?|₹|INR)\\s*[:\\-]?\\s*(\\d{1,2}(?:,\\d{2})*,\\d{3}(?:\\.\\d+)?)\\s*/?-?");
     private static final Pattern NON_BUSINESS_ORDER_PATTERN = Pattern.compile(
             "(?i)\\b(income tax act|section 271|itat|excise\\s*&?\\s*taxation|assessing authority|gst act|penalty order|demand order|tribunal|tax authorit(?:y|ies))\\b");
-    // I/O-bound (network scrape), so a higher cap than CPU core count is fine here.
-    private static final ExecutorService LOOKUP_EXECUTOR = Executors.newFixedThreadPool(
-            Math.max(4, Math.min(12, Runtime.getRuntime().availableProcessors() * 2))
-    );
-    // ScreenerScraperService itself uses a 10s Jsoup timeout per request (and may retry once on a
-    // 404 with a second 10s request), so this must comfortably exceed that or well-covered stocks
-    // spuriously show "Insufficient Data" whenever Screener.in is briefly slow or the thread pool is busy.
-    private static final long ROW_LOOKUP_TIMEOUT_SECONDS = 12;
+    // The actual defense against Screener's rate limiting is ScreenerRateLimiter, shared by every
+    // caller inside ScreenerAuthService - it caps request RATE app-wide, which is what Screener
+    // enforces (concurrent connection count alone wasn't the trigger; 429s showed up on the very
+    // first request even at low concurrency). This pool just bounds how many rows are in flight
+    // waiting on that shared limiter at once - a small number is enough since they all serialize
+    // through it anyway.
+    private static final ExecutorService LOOKUP_EXECUTOR = Executors.newFixedThreadPool(3);
+    // A full page (BSE_PAGE_SIZE rows, up to 3 Screener calls each) all queue through the same
+    // rate limiter, so the last row in a page can wait ~90s+ just for its turn before it even
+    // starts its own request. This must comfortably exceed that queueing time, not just
+    // ScreenerScraperService's per-request retry/backoff time - a short timeout here doesn't stop
+    // the underlying task, it just abandons the row early while it keeps running (and retrying)
+    // on LOOKUP_EXECUTOR in the background, well after the response has already been sent.
+    private static final long ROW_LOOKUP_TIMEOUT_SECONDS = 180;
 
     // BSE's own fixed page size for this feed (not documented anywhere, confirmed by probing the live API).
     private static final int BSE_PAGE_SIZE = 50;
@@ -66,18 +76,21 @@ public class BseAwardStockService {
     private final StockSearchService stockSearchService;
     private final ScreenerScraperService screenerScraperService;
     private final FundamentalScoreService fundamentalScoreService;
+    private final AwardEnrichmentProgressTracker enrichmentProgressTracker;
     private final WebClient webClient;
 
     public BseAwardStockService(
             ObjectMapper objectMapper,
             StockSearchService stockSearchService,
             ScreenerScraperService screenerScraperService,
-            FundamentalScoreService fundamentalScoreService
+            FundamentalScoreService fundamentalScoreService,
+            AwardEnrichmentProgressTracker enrichmentProgressTracker
     ) {
         this.objectMapper = objectMapper;
         this.stockSearchService = stockSearchService;
         this.screenerScraperService = screenerScraperService;
         this.fundamentalScoreService = fundamentalScoreService;
+        this.enrichmentProgressTracker = enrichmentProgressTracker;
         this.webClient = WebClient.builder()
                 .defaultHeader(HttpHeaders.USER_AGENT, USER_AGENT)
                 .defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
@@ -112,6 +125,7 @@ public class BseAwardStockService {
                 totalCount = table1.get(0).path("ROWCNT").asInt(0);
             }
 
+            int progressGeneration = enrichmentProgressTracker.start(rows.size());
             List<CompletableFuture<RowResult>> futures = new ArrayList<>();
             for (int i = 0; i < rows.size(); i++) {
                 final int index = i;
@@ -120,7 +134,12 @@ public class BseAwardStockService {
                 futures.add(CompletableFuture
                         .supplyAsync(() -> new RowResult(index, toResponse(row)), LOOKUP_EXECUTOR)
                         .completeOnTimeout(new RowResult(index, fallback), ROW_LOOKUP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                        .exceptionally(ex -> new RowResult(index, fallback)));
+                        .exceptionally(ex -> {
+                            log.warn("Row processing failed unexpectedly for company \"{}\": {}",
+                                    fallback.companyName(), ex.getMessage());
+                            return new RowResult(index, fallback);
+                        })
+                        .whenComplete((result, ex) -> enrichmentProgressTracker.increment(progressGeneration)));
             }
 
             List<AwardStockResponse> items = futures.stream()
@@ -136,12 +155,17 @@ public class BseAwardStockService {
         }
     }
 
+    /** Polled by the frontend while an awards fetch is in flight. */
+    public AwardEnrichmentProgressTracker.Snapshot getAwardsProgress() {
+        return enrichmentProgressTracker.snapshot();
+    }
+
     private record RowResult(int index, AwardStockResponse response) {
     }
 
     private AwardStockResponse toPartialResponse(JsonNode row) {
         String companyName = text(row, "SLONGNAME");
-        String symbol = resolveSymbol(companyName, text(row, "NSURL"));
+        String symbol = resolveSymbol(row);
         String announcementHeadline = firstNonBlank(text(row, "MORE"), text(row, "HEADLINE"), text(row, "NEWSSUB"));
         String amountSource = firstNonBlank(text(row, "MORE"), announcementHeadline);
 
@@ -212,13 +236,26 @@ public class BseAwardStockService {
                     partial.announcementDate(),
                     partial.sourceUrl()
             );
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
+            log.warn("Fundamental enrichment failed for company \"{}\" (symbol={}): {}",
+                    partial.companyName(), partial.symbol(), ex.getMessage());
             return partial;
         }
     }
 
-    private String resolveSymbol(String companyName, String sourceUrl) {
+    private String resolveSymbol(JsonNode row) {
+        String companyName = text(row, "SLONGNAME");
+        String sourceUrl = text(row, "NSURL");
         LinkedHashSet<String> candidates = new LinkedHashSet<>();
+
+        // BSE's own scrip code is an exact identifier straight from the announcement itself -
+        // try it first, ahead of fuzzy name matching. This is what makes BSE-only/SME-listed
+        // companies (never present in our NSE-only symbol list) resolvable at all. Screener.in
+        // accepts a bare BSE scrip code as a company URL slug, same as an NSE ticker.
+        String scripCode = text(row, "SCRIP_CD");
+        if (isBseScripCode(scripCode)) {
+            candidates.add(scripCode);
+        }
 
         addSearchMatches(candidates, companyName);
         String normalized = normalizeCompanyName(companyName);
@@ -237,7 +274,13 @@ public class BseAwardStockService {
             }
         }
 
+        log.info("No symbol resolved for company \"{}\" (BSE scrip={}, nsurl={}) - enrichment skipped",
+                companyName, scripCode.isBlank() ? "—" : scripCode, sourceUrl.isBlank() ? "—" : sourceUrl);
         return null;
+    }
+
+    private boolean isBseScripCode(String value) {
+        return value != null && value.matches("\\d{5,6}");
     }
 
     private void addSearchMatches(Set<String> candidates, String query) {

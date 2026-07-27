@@ -4,11 +4,12 @@ import com.stockdashboard.dto.FundamentalsResponse;
 import com.stockdashboard.dto.FundamentalsResponse.RatioRange;
 import com.stockdashboard.dto.FundamentalsResponse.SectorInfo;
 import com.stockdashboard.exception.StockNotFoundException;
-import org.jsoup.Jsoup;
 import org.jsoup.HttpStatusException;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
@@ -34,21 +35,31 @@ import java.util.Map;
 @Service
 public class ScreenerScraperService {
 
-    private static final String COMPANY_URL = "https://www.screener.in/company/%s/consolidated/";
-    private static final String USER_AGENT =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
-    private static final String STANDALONE_URL = "https://www.screener.in/company/%s/";
-    private static final int REQUEST_TIMEOUT_MS = 20_000;
-    ;
+    private static final Logger log = LoggerFactory.getLogger(ScreenerScraperService.class);
 
-    @Cacheable(value = "fundamentals", key = "#symbol")
+    private static final String COMPANY_URL = "https://www.screener.in/company/%s/consolidated/";
+    private static final String STANDALONE_URL = "https://www.screener.in/company/%s/";
+
+    // Screener rate-limits per-company fetches almost immediately under concurrent load - seen as
+    // both HTTP 429 AND, just as often, a connection that never responds at all (read timeout) -
+    // well before any real "not found" case would occur. A retry-with-backoff absorbs both instead
+    // of the caller misreading a transient failure as "no such stock".
+    private static final int MAX_ATTEMPTS = 6;
+    private static final long RETRY_BACKOFF_MS = 1000;
+
+    private final ScreenerAuthService screenerAuthService;
+
+    public ScreenerScraperService(ScreenerAuthService screenerAuthService) {
+        this.screenerAuthService = screenerAuthService;
+    }
+
+    @Cacheable(value = "fundamentals", key = "#symbol", sync = true)
     public FundamentalsResponse fetchFundamentals(String symbol) {
         Document doc = fetchDocument(symbol);
         Map<String, String> topRatios = extractTopRatios(doc);
 
         if (isEmpty(topRatios.get("Market Cap"))) {
-            System.out.println("Consolidated page empty for " + symbol +
-                    ", falling back to standalone page");
+            log.debug("Consolidated page empty for {}, falling back to standalone page", symbol);
 
             doc = fetchStandaloneDocument(symbol);
 
@@ -57,7 +68,6 @@ public class ScreenerScraperService {
         }
 
         String companyName = extractCompanyName(doc);
-        System.out.println(topRatios);
         String industryPE = "—";
         String relativePE = "—";
         String pbRatio = calculatePbRatio(
@@ -322,32 +332,58 @@ public class ScreenerScraperService {
     }
 
     private Document fetchStandaloneDocument(String symbol) {
-        try {
-            return Jsoup.connect(String.format(STANDALONE_URL, symbol))
-                    .userAgent(USER_AGENT)
-                    .header("Accept-Language", "en-US,en;q=0.9")
-                    .timeout(10_000)
-                    .get();
-
-        } catch (IOException e) {
-            throw new RuntimeException(
-                    "Could not fetch standalone page for " + symbol,
-                    e
-            );
-        }
+        return fetchWithRetry(String.format(STANDALONE_URL, symbol), symbol);
     }
 
     private Document fetchDocument(String symbol) {
+        return fetchWithRetry(String.format(COMPANY_URL, symbol), symbol);
+    }
+
+    /**
+     * Fetches a Screener.in page, retrying with backoff on any transient IOException - HTTP 429,
+     * a stalled connection that times out with no response, etc. - and only treating a genuine 404
+     * as "stock not found". Previously this only retried on HttpStatusException(429): a
+     * SocketTimeoutException ("Read timed out") has a different exception type and fell through to
+     * an immediate rethrow with zero retries, even though it's the exact same underlying rate-limit
+     * behaviour just manifesting as a hang instead of an explicit 429 response.
+     */
+    private Document fetchWithRetry(String url, String symbol) {
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            try {
+                return screenerAuthService.getAuthenticated(url);
+            } catch (RuntimeException e) {
+                Throwable cause = e.getCause();
+                if (cause instanceof HttpStatusException httpEx && httpEx.getStatusCode() == 404) {
+                    throw new StockNotFoundException("No fundamentals found for symbol: " + symbol);
+                }
+                if (!(cause instanceof IOException) || attempt >= MAX_ATTEMPTS) {
+                    if (cause instanceof HttpStatusException httpEx) {
+                        log.warn("Screener returned HTTP {} fetching {} for {} (attempt {}/{})",
+                                httpEx.getStatusCode(), url, symbol, attempt, MAX_ATTEMPTS);
+                    } else if (cause instanceof IOException) {
+                        log.warn("Screener fetch failed ({}: {}) fetching {} for {} (attempt {}/{})",
+                                cause.getClass().getSimpleName(), cause.getMessage(), url, symbol, attempt, MAX_ATTEMPTS);
+                    }
+                    throw e;
+                }
+                long backoffMs = RETRY_BACKOFF_MS * attempt;
+                String reason = cause instanceof HttpStatusException httpEx
+                        ? "HTTP " + httpEx.getStatusCode()
+                        : cause.getClass().getSimpleName();
+                log.warn("Screener fetch failed ({}) fetching {} for {} - retrying in {}ms (attempt {}/{})",
+                        reason, url, symbol, backoffMs, attempt, MAX_ATTEMPTS);
+                sleep(backoffMs);
+            }
+        }
+        throw new IllegalStateException("Unreachable: retry loop exited without returning or throwing");
+    }
+
+    private void sleep(long millis) {
         try {
-            return Jsoup.connect(String.format(COMPANY_URL, symbol))
-                    .userAgent(USER_AGENT)
-                    .header("Accept-Language", "en-US,en;q=0.9")
-                    .timeout(10_000)
-                    .get();
-        } catch (HttpStatusException e) {
-            throw new StockNotFoundException("No fundamentals found for symbol: " + symbol);
-        } catch (IOException e) {
-            throw new RuntimeException("Could not reach Screener.in: " + e.getMessage(), e);
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Interrupted while backing off from Screener.in rate limit", e);
         }
     }
 
@@ -366,12 +402,6 @@ public class ScreenerScraperService {
     private Map<String, String> extractTopRatios(Document doc) {
         Map<String, String> ratios = new LinkedHashMap<>();
         Element ratiosList = doc.selectFirst("#top-ratios");
-//        System.out.println("Ratiosss: " + ratiosList);
-        Element marketCap = doc.selectFirst("#top-ratios .number");
-
-        System.out.println("Market cap number = " +
-                (marketCap == null ? "null" : "'" + marketCap.text() + "'"));
-        System.out.println(doc.outerHtml().length());
         if (ratiosList == null) {
             return ratios;
         }
@@ -578,7 +608,15 @@ public class ScreenerScraperService {
     private double parseNumber(String raw) {
         if (raw == null || raw.equals("—") || raw.isBlank()) return 0;
         String cleaned = raw.replaceAll("[^0-9.\\-]", "");
-        return cleaned.isEmpty() ? 0 : Double.parseDouble(cleaned);
+        if (cleaned.isEmpty()) return 0;
+        // Scraped cells occasionally leave more than one literal "." after stripping (garbled or
+        // footnoted table markup) - Double.parseDouble rejects that with a bare "multiple points"
+        // NumberFormatException, so collapse everything after the first decimal point.
+        int firstDot = cleaned.indexOf('.');
+        if (firstDot >= 0) {
+            cleaned = cleaned.substring(0, firstDot + 1) + cleaned.substring(firstDot + 1).replace(".", "");
+        }
+        return Double.parseDouble(cleaned);
     }
 
     private String formatRatio(double value) {
@@ -640,23 +678,8 @@ public class ScreenerScraperService {
         return companyInfo.attr("data-warehouse-id");
     }
     private Document fetchPeerComparison(String warehouseId) {
-
-        try {
-            return Jsoup.connect(
-                            "https://www.screener.in/api/company/" +
-                                    warehouseId +
-                                    "/peers/")
-                    .userAgent(USER_AGENT)
-                    .header("Accept-Language", "en-US,en;q=0.9")
-                    .timeout(10000)
-                    .get();
-
-        } catch (IOException e) {
-            throw new RuntimeException(
-                    "Unable to fetch peer comparison",
-                    e
-            );
-        }
+        return screenerAuthService.getAuthenticated(
+                "https://www.screener.in/api/company/" + warehouseId + "/peers/");
     }
     private String extractIndustryPE(Document peerDoc) {
 

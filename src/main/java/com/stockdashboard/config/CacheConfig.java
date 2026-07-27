@@ -53,14 +53,6 @@ public class CacheConfig {
                 .build()
         );
 
-        manager.registerCustomCache(
-            "resultsAnnounced",
-            Caffeine.newBuilder()
-                .expireAfterWrite(30, TimeUnit.MINUTES)
-                .maximumSize(100)
-                .build()
-        );
-
         // Headlines churn throughout the day, so this needs a much shorter
         // TTL than the fundamentals-style caches above.
         manager.registerCustomCache(

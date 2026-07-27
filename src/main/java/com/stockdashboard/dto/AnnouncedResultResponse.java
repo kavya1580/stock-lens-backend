@@ -10,6 +10,7 @@ public record AnnouncedResultResponse(
         String latestQuarterSales,
         String latestQuarterNetProfit,
         Double qoqProfitGrowthPercent,
+        Double yoyProfitGrowthPercent,
         String priorTrendDirection,
         String actualVsExpected,
         String note,

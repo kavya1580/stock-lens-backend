@@ -14,8 +14,10 @@ import com.stockdashboard.dto.StockIndicatorResponse;
 import com.stockdashboard.dto.StockOverviewResponse;
 import com.stockdashboard.dto.StockSearchResult;
 import com.stockdashboard.dto.UpcomingResultResponse;
+import com.stockdashboard.service.AwardEnrichmentProgressTracker;
 import com.stockdashboard.service.BseAwardStockService;
-import com.stockdashboard.service.BseResultsCalendarService;
+import com.stockdashboard.service.ResultsEnrichmentProgressTracker;
+import com.stockdashboard.service.ScreenerResultsCalendarService;
 import com.stockdashboard.service.FundamentalScoreService;
 import com.stockdashboard.service.GeminiService;
 import com.stockdashboard.service.NewsService;
@@ -35,7 +37,7 @@ public class StockController {
     private final FundamentalScoreService fundamentalScoreService;
     private final ScreenerScraperService screenerScraperService;
     private final BseAwardStockService bseAwardStockService;
-    private final BseResultsCalendarService bseResultsCalendarService;
+    private final ScreenerResultsCalendarService screenerResultsCalendarService;
     private final GeminiService geminiService;
     private final NewsService newsService;
 
@@ -45,7 +47,7 @@ public class StockController {
             FundamentalScoreService fundamentalScoreService,
             ScreenerScraperService screenerScraperService,
             BseAwardStockService bseAwardStockService,
-            BseResultsCalendarService bseResultsCalendarService,
+            ScreenerResultsCalendarService screenerResultsCalendarService,
             GeminiService geminiService,
             NewsService newsService
     ) {
@@ -54,7 +56,7 @@ public class StockController {
         this.fundamentalScoreService = fundamentalScoreService;
         this.screenerScraperService = screenerScraperService;
         this.bseAwardStockService = bseAwardStockService;
-        this.bseResultsCalendarService = bseResultsCalendarService;
+        this.screenerResultsCalendarService = screenerResultsCalendarService;
         this.geminiService = geminiService;
         this.newsService = newsService;
     }
@@ -104,24 +106,29 @@ public class StockController {
         return bseAwardStockService.fetchAwardStocks(pageNo, prevDate, toDate, search);
     }
 
+    @GetMapping("/awards/progress")
+    public AwardEnrichmentProgressTracker.Snapshot getAwardsProgress() {
+        return bseAwardStockService.getAwardsProgress();
+    }
+
     @GetMapping("/results/upcoming")
     public PagedResult<UpcomingResultResponse> getUpcomingResults(
-            @RequestParam(defaultValue = "1") int pageNo,
-            @RequestParam String prevDate,
-            @RequestParam String toDate,
-            @RequestParam(defaultValue = "P") String search
+            @RequestParam(defaultValue = "1") int pageNo
     ) {
-        return bseResultsCalendarService.fetchUpcomingResults(pageNo, prevDate, toDate, search);
+        return screenerResultsCalendarService.fetchUpcomingResults(pageNo);
     }
 
     @GetMapping("/results/announced")
     public PagedResult<AnnouncedResultResponse> getAnnouncedResults(
             @RequestParam(defaultValue = "1") int pageNo,
-            @RequestParam String prevDate,
-            @RequestParam String toDate,
-            @RequestParam(defaultValue = "P") String search
+            @RequestParam(defaultValue = "2") int lookbackDays
     ) {
-        return bseResultsCalendarService.fetchAnnouncedResults(pageNo, prevDate, toDate, search);
+        return screenerResultsCalendarService.fetchAnnouncedResults(pageNo, lookbackDays);
+    }
+
+    @GetMapping("/results/announced/progress")
+    public ResultsEnrichmentProgressTracker.Snapshot getAnnouncedResultsProgress() {
+        return screenerResultsCalendarService.getAnnouncedResultsProgress();
     }
 
     /**

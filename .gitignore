@@ -7,3 +7,6 @@ data/
 .settings/
 .project
 .classpath
+
+# Personal Screener.in login credentials used by ScreenerAuthService - never commit these.
+screener-credentials.properties
