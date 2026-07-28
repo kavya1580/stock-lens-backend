@@ -2,7 +2,6 @@ package com.stockdashboard.dto;
 
 import java.util.List;
 
-/** RECONSTRUCTED — matches the constructor call in StockAnalysisService.getIndicators() exactly. */
 public record StockIndicatorResponse(
         String symbol,
         String exchange,

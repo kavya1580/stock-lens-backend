@@ -17,7 +17,7 @@ public class CacheConfig {
 
     @Bean
     public CacheManager cacheManager() {
-        CaffeineCacheManager manager = new CaffeineCacheManager("stockIndicators", "stockSearch");
+        CaffeineCacheManager manager = new CaffeineCacheManager("stockIndicators");
         manager.setCaffeine(
                 Caffeine.newBuilder()
                         .expireAfterWrite(indicatorsTtlSeconds, TimeUnit.SECONDS)

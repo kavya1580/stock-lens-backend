@@ -4,7 +4,7 @@ This doc walks through every feature the backend exposes and explains the
 actual mechanics behind it: where the data comes from, how it's parsed, what
 it computes, and where it's fragile. Pairs with `ARCHITECTURE.md` (package
 map, scoring-model reference table) — this file is the narrative "how it
-really works" companion. All 11 endpoints live on `StockController`
+really works" companion. All 14 endpoints live on `StockController`
 (`/api/stocks/**`); symbols are always normalized to `symbol.trim().toUpperCase()`
 before touching any service.
 
@@ -31,8 +31,8 @@ before touching any service.
 - **Matching**: query uppercased; two-pass bucketing — symbols that
   `startsWith(query)` first, then names that `contains(query)`, concatenated
   and truncated to the limit. No fuzzy/typo tolerance.
-- Not actually cached — a `stockSearch` Caffeine cache is registered in
-  `CacheConfig` but `search()` has no `@Cacheable` annotation on it.
+- Not cached — a plain in-memory list scan is already fast enough that
+  `search()` has no `@Cacheable` annotation on it.
 
 ## 2. Fundamentals Scraping — `GET /api/stocks/{symbol}/fundamentals`
 
@@ -202,6 +202,12 @@ and rating where a symbol can be resolved.
   own page size, used only to compute `totalPages` — if BSE changes it,
   pagination math goes quietly wrong.
 - Cached 30 min, keyed by page/date-range/search params.
+- **Live enrichment progress**: `GET /api/stocks/awards/progress` returns an
+  `AwardEnrichmentProgressTracker.Snapshot` (`total`/`completed`) that the
+  frontend polls while a page's rows are still being enriched, so the UI can
+  show a determinate "N of M enriched" progress bar instead of a generic
+  spinner. A monotonic generation token guards against a fast, unrelated
+  request resetting the counter mid-poll.
 
 ## 6. Results Calendar — `GET /api/stocks/results/upcoming` and `/results/announced`
 
@@ -289,6 +295,15 @@ authenticated Screener.in account's dedicated results feed directly.
   replayed from a stale failure) on the next `/results/announced` call,
   while symbols that already succeeded just hit the fundamentals cache and
   return instantly.
+- **Both QoQ and YoY profit growth are surfaced**: `AnnouncedResultResponse`
+  carries `qoqProfitGrowthPercent` (used by `ResultExpectationCalculator`'s
+  Beat/Below Trend heuristic above) alongside `yoyProfitGrowthPercent`, so
+  the frontend can show both figures side by side instead of only the
+  trend-relative one.
+- **Live enrichment progress**: `GET /api/stocks/results/announced/progress`
+  returns a `ResultsEnrichmentProgressTracker.Snapshot`, polled by the
+  frontend the same way as the Order Wins progress bar above — a separate
+  tracker instance so the two tabs' progress bars can't clobber each other.
 
 ## 7. AI Analysis — `GET /api/stocks/{symbol}/ai-analysis`
 
@@ -364,10 +379,12 @@ currently called by the frontend, which uses `/fundamentals/analysis` +
 - **Caching** (`CacheConfig`, Caffeine, `expireAfterWrite` + max-size, no
   manual eviction endpoint): `fundamentals` (24h), `stockIndicators` (30m),
   `awardStocks`/`resultsUpcoming` (30m each), `news` (15m), `geminiAnalysis`
-  (12h). `stockSearch` is registered but unused. `resultsAnnounced` was
-  removed entirely — see Results Calendar above for why.
-- **CORS**: `/api/**` allowed only from `localhost:3000`/`localhost:5173`
-  (dev frontend ports) — no production origin configured yet.
+  (12h). `resultsAnnounced` was removed entirely — see Results Calendar
+  above for why.
+- **CORS**: `/api/**` allowed only from origins listed in
+  `app.cors.allowed-origins` (`CorsConfig`), defaulting to
+  `localhost:3000`/`localhost:5173` — set this property to your deployed
+  frontend's origin before hosting.
 - **Error handling**: `StockNotFoundException` → 404; everything else →
   generic 500 with the exception message, via a single
   `@RestControllerAdvice`.
@@ -377,18 +394,6 @@ currently called by the frontend, which uses `/fundamentals/analysis` +
 
 ## Known issues worth remediating
 
-- **A live Gemini API key is committed in plaintext** in
-  `application.properties`, directly beneath a comment instructing it be
-  set via `GEMINI_API_KEY` instead — that advice wasn't followed. Rotate
-  the key and move it to an environment variable / secrets manager.
-- Debug `System.out.println` calls remain in `ScreenerScraperService`'s
-  production code path (symbol/fallback logging, dumping the full
-  top-ratios map).
-- `Untitled-1.html` / `PageSource.html` (saved Screener pages, under
-  `src/main/java`, not test resources) and root-level `JsoupProbe.java`
-  (a standalone `main()` scraper-debugging script, outside the Maven
-  package tree) are dev fixtures, safe to leave or relocate but not part
-  of the shipped app.
 - BSE is now only used by `BseAwardStockService` (Order Wins) — the
   Results Calendar was fully migrated to authenticated Screener.in scraping
   (`ScreenerResultsCalendarService`/`ScreenerAuthService`), and
@@ -398,5 +403,3 @@ currently called by the frontend, which uses `/fundamentals/analysis` +
   project root for fundamentals scraping *and* the results calendar to
   work at all now — both paths go through the same authenticated session,
   so a bad/missing credential breaks both features at once, not just one.
-- README documents port 8080; `application.properties` actually sets
-  `server.port=8082`.

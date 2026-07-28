@@ -18,7 +18,6 @@
     <description>Fundamental (Screener.in) + technical (Yahoo Finance) analysis for Indian stocks</description>
 
     <properties>
-        <java.version>17</java.version>
         <maven.compiler.source>23</maven.compiler.source>
         <maven.compiler.target>23</maven.compiler.target>
     </properties>

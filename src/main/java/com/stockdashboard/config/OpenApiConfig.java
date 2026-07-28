@@ -14,6 +14,7 @@ public class OpenApiConfig {
                 .info(new Info()
                         .title("Stock Dashboard API")
                         .version("1.0.0")
-                        .description("Technical indicator dashboard for Indian stocks (NSE/BSE)"));
+                        .description("Fundamental + technical analysis, order-wins tracking, and a results "
+                                + "calendar for Indian (NSE/BSE) stocks"));
     }
 }

@@ -6,6 +6,8 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.parser.Parser;
 import org.jsoup.select.Elements;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
@@ -22,6 +24,8 @@ import java.util.List;
  */
 @Service
 public class NewsService {
+
+    private static final Logger log = LoggerFactory.getLogger(NewsService.class);
 
     private static final String RSS_URL =
             "https://news.google.com/rss/search?q=%s&hl=en-IN&gl=IN&ceid=IN:en";
@@ -71,7 +75,7 @@ public class NewsService {
 
             return news;
         } catch (Exception e) {
-            System.out.println("Failed to fetch news for " + companyName + ": " + e.getMessage());
+            log.warn("Failed to fetch news for \"{}\": {}", companyName, e.getMessage());
             return List.of();
         }
     }

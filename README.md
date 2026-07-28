@@ -1,73 +1,116 @@
-# Stock Dashboard Backend (complete, merged)
+# Stock Dashboard Backend
 
-Spring Boot backend combining fundamental analysis (Screener.in scrape) with
-technical analysis (Yahoo Finance OHLCV + hand-rolled indicators).
+Spring Boot backend for a personal Indian-stocks (NSE/BSE) research dashboard.
+It combines technical indicators (Yahoo Finance OHLCV), fundamentals
+(Screener.in), AI-generated analysis (Gemini), an order-wins/BSE-awards feed,
+and a results calendar into one API consumed by the [`stock-lens`](../stock-lens)
+React frontend.
 
-## Endpoints
+See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together and
+[FUNCTIONALITY.md](FUNCTIONALITY.md) for a feature-by-feature walkthrough.
+
+## Features
+
+- **Technical analysis** — OHLCV history plus SMA/EMA/RSI/MACD/Bollinger Bands,
+  computed in-process from Yahoo Finance data.
+- **Fundamental analysis** — metrics scraped from Screener.in, scored across
+  10 weighted categories (profitability, growth, solvency, valuation, etc.)
+  into a single `finalScore` with red/green flags.
+- **AI analysis & chat** — Gemini-generated narrative analysis and follow-up
+  Q&A grounded in a stock's fundamentals and technicals.
+- **Order wins** — BSE corporate-announcement feed filtered to
+  order/contract-win filings, enriched with fundamentals and a live progress
+  indicator while the enrichment fan-out is in flight.
+- **Results calendar** — upcoming and recently-announced quarterly results,
+  scraped from an authenticated Screener.in session, with an expected-direction
+  heuristic based on a company's trailing profit trend.
+- **News** — recent headlines per stock via Google News RSS.
+
+## Prerequisites
+
+- JDK 23
+- Maven
+- A [Screener.in](https://www.screener.in) account (free) — the results
+  calendar logs in as you to reach pages that are gated behind auth
+- A free [Gemini API key](https://aistudio.google.com/apikey) — only needed
+  for the AI Analysis tab
+
+## Setup
+
+1. **Screener.in credentials** — create `screener-credentials.properties` in
+   the project root (this file is gitignored and never committed):
+
+   ```properties
+   screener.username=you@example.com
+   screener.password=your-password
+   ```
+
+2. **Gemini API key** — set it as an environment variable before starting the
+   app:
+
+   ```
+   export GEMINI_API_KEY=your-key-here
+   ```
+
+   The AI Analysis/chat endpoints will return errors without it; every other
+   endpoint works fine if it's left unset.
+
+3. **Run it**
+
+   ```
+   mvn spring-boot:run
+   ```
+
+   Starts on `http://localhost:8082`.
+
+   ```
+   curl http://localhost:8082/api/stocks/TCS/overview
+   ```
+
+## API
+
+All endpoints are under `/api/stocks`. Swagger UI is available at
+`http://localhost:8082/swagger-ui.html` once the app is running.
 
 ```
-GET /api/stocks/search?q=TCS                 -> symbol/name search
-GET /api/stocks/{symbol}/fundamentals         -> Screener.in metrics
-GET /api/stocks/{symbol}/indicators           -> full OHLCV + SMA/EMA/RSI/MACD/Bollinger history
-GET /api/stocks/{symbol}/overview             -> fundamentals + latest technical snapshot only
+GET  /search?q={query}                                  -> symbol/name search
+GET  /{symbol}/indicators?exchange=&range=               -> full OHLCV + indicator history
+GET  /{symbol}/fundamentals                              -> Screener.in metrics
+GET  /{symbol}/fundamentals/analysis                     -> fundamentals + score breakdown
+GET  /{symbol}/score                                     -> score breakdown only
+GET  /{symbol}/overview?exchange=&range=                 -> fundamentals + latest technical snapshot
+GET  /{symbol}/ai-analysis?exchange=&range=              -> Gemini-generated structured analysis
+POST /{symbol}/ai-chat?exchange=&range=                  -> follow-up AI chat turn (body: history + message)
+GET  /{symbol}/news                                      -> recent headlines (Google News RSS)
+
+GET  /awards?pageNo=&prevDate=&toDate=&search=           -> BSE order-win announcements, enriched
+GET  /awards/progress                                    -> live enrichment progress for the above
+
+GET  /results/upcoming?pageNo=                           -> upcoming quarterly results
+GET  /results/announced?pageNo=&lookbackDays=            -> recently announced quarterly results
+GET  /results/announced/progress                         -> live enrichment progress for the above
 ```
 
-## Run it
+## Project structure
 
 ```
-mvn spring-boot:run
+src/main/java/com/stockdashboard/
+├── config/       Spring configuration (CORS, cache, WebClient, OpenAPI)
+├── controller/    REST endpoints (StockController)
+├── dto/          Request/response records
+├── exception/    Global exception handling
+└── service/      Scraping, indicator/score computation, AI, enrichment tracking
 ```
 
-Starts on `http://localhost:8080`.
+## Notes
 
-```
-curl http://localhost:8080/api/stocks/TCS/overview
-```
-
-## File provenance — read before trusting this over your own copies
-
-This was assembled from three rounds of files you shared plus the fundamentals
-work from earlier in our conversation. Not everything could come from a
-verified source:
-
-**Yours, unchanged** — `IndicatorService.java`, `StockAnalysisService.java`,
-`StockSearchService.java`, `YahooFinanceService.java`, `StockNotFoundException.java`.
-
-**Yours, modified** — `StockController.java` (added the `/fundamentals` and
-`/overview` endpoints), `CacheConfig.java` (added a separate 24h `fundamentals`
-cache instead of sharing the indicators TTL).
-
-**Mine, from earlier in this conversation** — `ScreenerScraperService.java`,
-`FundamentalsResponse.java`, `StockOverviewResponse.java`.
-
-**RECONSTRUCTED — verify against your real files if you have them**, since you
-never shared the originals: `OhlcvBar`, `MacdResult`, `BollingerResult`,
-`StockIndicatorResponse`, `LatestSnapshot`, `StockSearchResult`. Every field
-was inferred from how it's constructed/accessed in the code you did share, so
-confidence is high, but two specific spots are genuine guesses rather than
-certainties:
-- `LatestSnapshot`'s 6th field — `buildLatestSnapshot()` always passes a
-  literal `null` there. I've named it `ema20` as the most plausible intent,
-  but it's currently dead weight either way (always null) until something
-  populates it.
-- `StockSearchResult`'s third field — I went with `series` (matching NSE's
-  own published symbol-list format), but your actual CSV/record may use
-  something else.
-
-**Brand new, not previously discussed** — `StockDashboardApplication.java`
-(main class), `WebClientConfig.java` (the `yahooWebClient` bean
-`YahooFinanceService` expects), `CorsConfig.java`, `GlobalExceptionHandler.java`,
-`pom.xml`, `application.properties`. If you already have working versions of
-any of these in your real project, keep yours and skip mine — these are
-filling gaps, not replacing anything you confirmed exists.
-
-**Placeholder, replace this one** — `nse_symbols.csv` has 9 sample rows so the
-app boots and `/search` returns something to test with. Swap in your actual
-full NSE symbol list (`StockSearchService` expects the same 3-column,
-header-then-rows CSV format).
-
-## If it doesn't compile
-
-Almost certainly one of the reconstructed DTOs doesn't match your real one
-field-for-field. Paste the compiler error and the real DTO and I'll fix the
-mismatch immediately rather than you needing to debug a guess.
+- Fundamentals and results-calendar data are scraped from Screener.in HTML,
+  which means selectors are hand-tuned against live markup and can break if
+  Screener changes their page structure — see ARCHITECTURE.md's "Known
+  Gotchas" for specifics.
+- The Screener.in login automation is for personal use against your own
+  account at a low request volume; it is not intended for redistribution or
+  scaled scraping.
+- `app.cors.allowed-origins` in `application.properties` defaults to local
+  dev ports (`3000`, `5173`) — set it to your deployed frontend's origin
+  before hosting this publicly.
