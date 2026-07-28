@@ -39,6 +39,12 @@
             <artifactId>spring-boot-starter-cache</artifactId>
         </dependency>
 
+        <!-- Exposes /actuator/health for Docker/Compose healthchecks -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
         <!-- HTML parsing for ScreenerScraperService -->
         <dependency>
             <groupId>org.jsoup</groupId>
